@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" fill="none">
+  <defs>
+    <linearGradient id="tile" x1="22" y1="12" x2="105" y2="116" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7650FF"/>
+      <stop offset="1" stop-color="#5830E8"/>
+    </linearGradient>
+    <filter id="glow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="3.2" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.48 0 0 0 0 0.31 0 0 0 0 1 0 0 0 0.65 0" result="colored"/>
+      <feMerge><feMergeNode in="colored"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <rect x="8" y="8" width="112" height="112" rx="27" fill="url(#tile)"/>
+  <rect x="9.5" y="9.5" width="109" height="109" rx="25.5" stroke="#A28AFF" stroke-opacity=".55" stroke-width="3"/>
+
+  <g filter="url(#glow)" stroke="#FFFFFF" stroke-width="8.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Cloud outline -->
+    <path d="M36.5 76.5C31.4 70.9 28.5 63.5 28.5 55.5C28.5 38.6 42.2 24.9 59.1 24.9C71.7 24.9 82.5 32.5 87.1 43.4C89.4 42.7 91.9 42.3 94.5 42.3C108.2 42.3 119.3 53.4 119.3 67.1C119.3 78.7 111.3 88.4 100.5 91"/>
+    <!-- Download arrow -->
+    <path d="M68 48.5V104"/>
+    <path d="M43.5 82.5L68 107L92.5 82.5"/>
+  </g>
+</svg>
