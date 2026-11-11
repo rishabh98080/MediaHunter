@@ -65,3 +65,4 @@ If you find MediaHunter useful, consider supporting its development:
 ## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
