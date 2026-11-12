@@ -14,6 +14,10 @@
 
 // In-memory tab store: tabId -> Map<urlKey, MediaItem>
 const tabMediaStore = new Map();
+// Last known URL (without hash) per tab for SPA navigation detection
+const tabUrlStore = new Map();
+// In-flight yt-dlp extraction promises keyed by `${tabId}:${cleanUrl}`
+const inFlightExtractions = new Map();
 // Timers for debounced popup updates: tabId -> timer
 const notifyTimers = new Map();
 
@@ -23,6 +27,16 @@ const notifyTimers = new Map();
 -------------------------------------------------- */
 
 const COMPANION_URL = 'http://127.0.0.1:9527';
+
+function stripUrlHash(url = '') {
+  try {
+    const parsed = new URL(url);
+    parsed.hash = '';
+    return parsed.href;
+  } catch {
+    return url.split('#')[0];
+  }
+}
 
 function isYtDlpPlatform(url = '') {
   if (!url) return false;
@@ -43,13 +57,42 @@ async function extractViaCompanion(pageUrl) {
   }
 }
 
+function extractViaCompanionForTab(tabId, pageUrl) {
+  if (!tabId || !pageUrl || !isYtDlpPlatform(pageUrl)) {
+    return Promise.resolve(null);
+  }
+  const cleanUrl = stripUrlHash(pageUrl);
+  const flightKey = `${tabId}:${cleanUrl}`;
+  if (inFlightExtractions.has(flightKey)) {
+    return inFlightExtractions.get(flightKey);
+  }
+
+  const promise = extractViaCompanion(pageUrl)
+    .then((ytdlpData) => {
+      if (!ytdlpData) return null;
+      const latestUrl = tabUrlStore.get(tabId);
+      if (latestUrl && latestUrl !== cleanUrl) {
+        return null;
+      }
+      registerYtDlpItems(tabId, ytdlpData, pageUrl);
+      return ytdlpData;
+    })
+    .catch(() => null)
+    .finally(() => {
+      inFlightExtractions.delete(flightKey);
+    });
+
+  inFlightExtractions.set(flightKey, promise);
+  return promise;
+}
+
 function sortMediaWithYtDlpFirst(items) {
   if (!Array.isArray(items)) return [];
   return [...items].sort((a, b) => {
     const aPriority = a.source === 'yt-dlp' || a.isPriority ? 1 : 0;
     const bPriority = b.source === 'yt-dlp' || b.isPriority ? 1 : 0;
     if (aPriority !== bPriority) return bPriority - aPriority;
-    return (a.timestamp || 0) - (b.timestamp || 0);
+    return (a.timestamp ?? 0) - (b.timestamp ?? 0);
   });
 }
 
@@ -396,6 +439,7 @@ function addOrUpdateItemSync(tabId, item) {
           : item.source || existing.source || 'Network',
       status: item.status ?? existing.status ?? null,
       mime: item.mime || existing.mime || '',
+      format: item.source === 'yt-dlp' ? (item.format || existing.format) : (existing.format || item.format),
       timestamp: Math.min(existing.timestamp ?? Date.now(), item.timestamp ?? Date.now()),
       isPriority: Boolean(existing.isPriority || item.isPriority),
     };
@@ -915,14 +959,20 @@ async function scanTabMedia(tabId) {
     };
   }
 
+  const cleanUrl = stripUrlHash(url);
+  const previousUrl = tabUrlStore.get(tabId);
+  if (cleanUrl && previousUrl && previousUrl !== cleanUrl) {
+    await clearTab(tabId);
+  }
+  if (cleanUrl) {
+    tabUrlStore.set(tabId, cleanUrl);
+  }
+
   // On supported platforms (YouTube, X.com, Instagram), invoke companion yt-dlp
   // so the official high-quality video/audio formats are extracted and placed first.
   if (isYtDlpPlatform(url)) {
     try {
-      const ytdlpData = await extractViaCompanion(url);
-      if (ytdlpData) {
-        registerYtDlpItems(tabId, ytdlpData, url);
-      }
+      await extractViaCompanionForTab(tabId, url);
     } catch (companionErr) {
       console.warn('MediaHunter: companion extraction error', companionErr);
     }
@@ -1120,25 +1170,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 -------------------------------------------------- */
 
 chrome.tabs.onRemoved.addListener((tabId) => {
+  tabUrlStore.delete(tabId);
   clearTab(tabId);
 });
 
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   const currentUrl = tab?.url || changeInfo.url || '';
+  const cleanUrl = stripUrlHash(currentUrl);
+  const previousUrl = tabUrlStore.get(tabId);
+  const urlChanged = Boolean(cleanUrl && previousUrl !== cleanUrl && (changeInfo.url || changeInfo.status === 'loading'));
 
-  // If the tab is navigating to a new URL, reset tab media
-  if (changeInfo.status === 'loading' && changeInfo.url) {
-    clearTab(tabId);
-    debouncedNotifyTab(tabId);
-  }
-
-  // Pre-fetch via yt-dlp companion for supported platforms (YouTube, X, Instagram)
-  // so the media items are ready immediately as the first results
-  if (changeInfo.status === 'loading' && currentUrl && isYtDlpPlatform(currentUrl)) {
-    extractViaCompanion(currentUrl).then((ytdlpData) => {
-      if (!ytdlpData) return;
-      registerYtDlpItems(tabId, ytdlpData, currentUrl);
+  // Reset tab media on full navigation or SPA URL change (e.g. YouTube/X/Instagram)
+  if (urlChanged) {
+    tabUrlStore.set(tabId, cleanUrl);
+    clearTab(tabId).then(() => {
+      debouncedNotifyTab(tabId);
+      if (isYtDlpPlatform(currentUrl)) {
+        extractViaCompanionForTab(tabId, currentUrl);
+      }
     }).catch(() => {});
+  } else if (changeInfo.status === 'loading' && currentUrl && isYtDlpPlatform(currentUrl)) {
+    // Pre-fetch via yt-dlp companion for supported platforms (YouTube, X, Instagram)
+    // so the media items are ready immediately as the first results
+    tabUrlStore.set(tabId, cleanUrl);
+    extractViaCompanionForTab(tabId, currentUrl);
   }
 
   // Inject the XHR interceptor into the MAIN world as early as possible.
